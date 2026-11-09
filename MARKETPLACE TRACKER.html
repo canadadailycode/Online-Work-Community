@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Marketplace Tracker</title>
+<style>
+:root{--bg:#f5f6f8;--c:#fff;--t:#1b1f24;--m:#6b7280;--b:#dfe3e8;--p:#2563eb;--g:#15803d;--r:#b91c1c;--w:#b45309}
+@media(prefers-color-scheme:dark){:root{--bg:#111418;--c:#1a1f26;--t:#e6e8eb;--m:#9aa3af;--b:#2c333c;--p:#60a5fa;--g:#4ade80;--r:#f87171;--w:#fbbf24}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:15px system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:var(--c);border-bottom:1px solid var(--b);position:sticky;top:0;z-index:5}
+nav{display:flex;gap:4px;flex-wrap:wrap}nav a{padding:6px 10px;border-radius:6px;color:var(--t);text-decoration:none}nav a.on{background:var(--p);color:#fff}
+.qa{margin-left:auto;display:flex;gap:6px}
+main{max-width:1200px;margin:auto;padding:12px}
+button,input,select,textarea{font:inherit;padding:7px 9px;border:1px solid var(--b);border-radius:6px;background:var(--c);color:var(--t)}
+button{cursor:pointer}button.pr{background:var(--p);color:#fff;border-color:var(--p)}button.dg{color:var(--r)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}
+.card{background:var(--c);border:1px solid var(--b);border-radius:8px;padding:10px}.card small{color:var(--m);display:block}.card b{font-size:1.3em}
+.box{background:var(--c);border:1px solid var(--b);border-radius:8px;padding:12px;margin:10px 0}
+h2{margin:14px 0 6px;font-size:1.2em}h3{margin:0 0 8px;font-size:1em}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;white-space:nowrap}th,td{padding:6px 8px;border-bottom:1px solid var(--b);text-align:left}th{color:var(--m);font-weight:600;cursor:default}th[data-s]{cursor:pointer}
+.up{color:var(--g);font-weight:600}.dn{color:var(--r);font-weight:600}.mut{color:var(--m)}.warn{color:var(--w)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0}
+dialog{border:1px solid var(--b);border-radius:10px;background:var(--c);color:var(--t);width:min(480px,94vw)}
+dialog label{display:block;margin:8px 0 2px;color:var(--m);font-size:.9em}dialog input,dialog select,dialog textarea{width:100%}
+#toast{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);background:#222;color:#fff;padding:9px 14px;border-radius:8px;display:none;z-index:9}
+.err{color:var(--r)}img.th{width:36px;height:36px;object-fit:cover;border-radius:4px}svg text{fill:var(--m);font-size:10px}
+</style></head>
+<body>
+<header>
+ <b>Marketplace Tracker</b>
+ <nav id="nav"></nav>
+ <select id="gco" title="Filter everything by company"></select>
+ <span class="qa"><button onclick="A.itemForm()">+ Item</button><button onclick="A.orderForm()">+ Order</button><button onclick="A.msgForm()">+ Messages</button></span>
+</header>
+<main id="app"></main>
+<dialog id="dlg"></dialog>
+<div id="toast"></div>
+<script>
+'use strict';
+const KEY='mpt_v1',$=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* ---------- dates (local, string based) ---------- */
+const pad=n=>String(n).padStart(2,'0'),fmt=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const parse=s=>{const[a,b,c]=s.split('-').map(Number);return new Date(a,b-1,c)};
+const add=(s,n)=>{const d=parse(s);d.setDate(d.getDate()+n);return fmt(d)};
+const today=()=>fmt(new Date()),wkS=s=>add(s,-((parse(s).getDay()+6)%7)),mS=s=>s.slice(0,7)+'-01';
+const addM=(s,n)=>{const d=parse(mS(s));d.setMonth(d.getMonth()+n);return fmt(d)};
+const mE=s=>add(addM(s,1),-1);
+const rng=(m,d)=>m=='day'?[d,d]:m=='week'?[wkS(d),add(wkS(d),6)]:[mS(d),mE(d)];
+const prevR=(m,d)=>m=='day'?rng(m,add(d,-1)):m=='week'?rng(m,add(d,-7)):rng(m,addM(d,-1));
+const days=(a,b)=>{const o=[];for(let d=a;d<=b;d=add(d,1))o.push(d);return o};
+/* ---------- data ---------- */
+const blank=()=>({v:1,companies:[],categories:[],items:[],orders:[],messages:[],expenses:[],settings:{currency:'',lastExport:null}});
+let D=load(),undoSnap=null;
+function load(){try{const r=localStorage.getItem(KEY);return r?Object.assign(blank(),JSON.parse(r)):blank()}catch(e){return blank()}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(D))}catch(e){alert('Could not save (browser storage full or blocked). Export a backup now and remove item images.')}}
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+function mut(fn,msg,destructive){if(destructive)undoSnap=JSON.stringify(D);fn();persist();draw();if(destructive)toast(msg,true)}
+function toast(m,undo){const t=$('#toast');t.innerHTML=esc(m)+(undo?' <button onclick="A.undo()">Undo</button>':'');t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',8000)}
+/* ---------- number formatting ---------- */
+const n=v=>v==null||!isFinite(v)?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:2});
+const money=v=>v==null||!isFinite(v)?'—':(D.settings.currency||'')+n(v),pc=v=>v==null||!isFinite(v)?'—':n(v)+'%';
+/* ---------- stats engine: everything derived from records ---------- */
+const S={iq:'',date:today(),mode:'week',sort:{items:['gp',-1],cos:['gp',-1]},ost:'',oq:'',of:'',ot:'',minMsg:0,co:''};
+const F=()=>S.co?{company:S.co}:{};
+function stats(a,b,f={}){
+ const M=Object.fromEntries(D.items.map(i=>[i.code,i])),ok=c=>{const i=M[c];return i&&(!f.company||i.company===f.company)&&(!f.code||i.code===f.code)};
+ const s={pub:0,msg:0,ord:0,conf:0,pend:0,del:0,dc:0,can:0,rev:0,cost:0,exp:0};
+ D.items.forEach(i=>{if(i.published>=a&&i.published<=b&&ok(i.code))s.pub++});
+ D.messages.forEach(m=>{if(m.date>=a&&m.date<=b&&ok(m.code))s.msg+=m.count});
+ D.orders.forEach(o=>{if(!ok(o.code))return;const dd=o.delDate||o.date;
+  if(o.status=='Delivered'&&dd>=a&&dd<=b){s.del++;s.rev+=o.price*o.qty;s.cost+=o.cost*o.qty}
+  if(o.date<a||o.date>b)return;s.ord++;
+  if(o.status=='Confirmed')s.conf++;else if(o.status=='Pending')s.pend++;else if(o.status=='Cancelled')s.can++;else if(o.status=='Delivered')s.dc++});
+ if(!f.company&&!f.code)D.expenses.forEach(e=>{if(e.date>=a&&e.date<=b)s.exp+=e.amount});
+ const r=(x,y)=>y?x/y*100:null;
+ s.gp=s.rev-s.cost;s.net=s.gp-s.exp;s.margin=r(s.gp,s.rev);s.aov=s.del?s.rev/s.del:null;s.appo=s.del?s.gp/s.del:null;
+ s.conv=r(s.ord,s.msg);s.dr=r(s.dc,s.ord);s.cr=r(s.can,s.ord);return s}
+const ALL=['0000-01-01','9999-12-31'];
+/* metric: key,label,direction(1 higher=better,-1 lower=better,0 neutral),type */
+const MET=[['pub','Items published',1],['msg','Messages',1],['ord','Orders',1],['conf','Confirmed',0],['pend','Pending',0],['del','Delivered',1],['can','Cancelled',-1],['rev','Revenue',1,'m'],['cost','Cost',0,'m'],['gp','Gross profit',1,'m'],['exp','Expenses',-1,'m'],['net','Net profit',1,'m'],['margin','Margin',1,'p'],['aov','Avg order value',1,'m'],['appo','Avg profit / delivered',1,'m'],['conv','Message→order',1,'p'],['dr','Order→delivery',1,'p'],['cr','Cancellation rate',-1,'p']];
+function cmp(c,p,pl,cl){
+ if(p.ord+p.msg+p.pub+p.exp==0)return'<p class=mut>Not enough previous data for comparison.</p>';
+ const warn=c.rev>p.rev&&c.gp<p.gp?'<p class=warn>⚠ Revenue rose but gross profit fell — check costs or product mix.</p>':'';
+ const rows=MET.map(([k,l,d,t])=>{const f=t=='m'?money:t=='p'?pc:n,a=p[k],b=c[k];let diff=null,pct=null,res='n/a',cls='';
+  if(a!=null&&b!=null){diff=b-a;pct=a?diff/Math.abs(a)*100:null;
+   if(diff==0||(pct!=null&&Math.abs(pct)<2))res='No meaningful change';else if(!d)res='Neutral';else{const g=(diff>0)==(d>0);res=g?'Improved':'Declined';cls=g?'up':'dn'}}
+  return`<tr><td>${l}</td><td>${f(a)}</td><td>${f(b)}</td><td>${diff==null?'—':(diff>0?'+':'')+f(diff)}</td><td>${pct==null?'n/a':(pct>0?'+':'')+n(pct)+'%'}</td><td class="${cls}">${res}</td></tr>`}).join('');
+ return warn+`<div class=tw><table><tr><th>Metric<th>${esc(pl)}<th>${esc(cl)}<th>Difference<th>%<th>Result</tr>${rows}</table></div><p class=mut>More cancellations/expenses count as worse. More messages are only good if they convert — check the Message→order row.</p>`}
+const card=(l,v,x='')=>`<div class=card><small>${l}</small><b>${v}</b>${x}</div>`;
+function chart(labels,series){
+ const W=640,H=200,P=24,all=series.flatMap(s=>s.v),mx=Math.max(0,...all),mn=Math.min(0,...all),sp=(mx-mn)||1;
+ const y=v=>P+(mx-v)/sp*(H-2*P),bw=(W-2*P)/labels.length,w=bw/(series.length+.5);
+ let o=`<svg viewBox="0 0 ${W} ${H}" width="100%"><line x1=${P} x2=${W-P} y1=${y(0)} y2=${y(0)} stroke="#888"/>`;
+ labels.forEach((l,i)=>{series.forEach((s,j)=>{const v=s.v[i],t=Math.min(y(v),y(0));o+=`<rect x=${P+i*bw+j*w} y=${t} width=${w-1} height=${Math.max(1,Math.abs(y(v)-y(0)))} fill=${s.c}><title>${esc(l)} — ${s.n}: ${n(v)}</title></rect>`});
+  if(labels.length<=16||i%Math.ceil(labels.length/12)==0)o+=`<text x=${P+i*bw} y=${H-6}>${esc(l.slice(5)||l)}</text>`});
+ return`<div class=box><div class=bar>${series.map(s=>`<span style="color:${s.c}">■ ${s.n}</span>`).join(' ')}</div>${o}</svg></div>`}
+const series=(m,k,end,f)=>{const L=[],R=[];for(let i=k-1;i>=0;i--){const d=m=='day'?add(end,-i):m=='week'?add(end,-7*i):addM(end,-i),[a,b]=rng(m,d);L.push(m=='month'?a.slice(0,7):a);R.push(stats(a,b,f))}return[L,R]};
+/* ---------- insights ---------- */
+function insights(f){
+ const t=stats(today(),today(),f),y=stats(add(today(),-1),add(today(),-1),f),o=[];
+ if(y.gp>0&&t.gp<y.gp*.7)o.push(`Gross profit today is ${n((1-t.gp/y.gp)*100)}% below yesterday.`);
+ if(y.msg>0&&t.msg>y.msg&&t.ord<y.ord)o.push('Messages increased vs yesterday but orders decreased — conversion is weakening.');
+ if(t.ord>=3&&y.ord>=3&&t.cr>y.cr)o.push(`Cancellation rate rose (${pc(y.cr)} → ${pc(t.cr)}).`);
+ const prev=days(add(today(),-7),add(today(),-1)).map(d=>stats(d,d,f)).filter(s=>s.ord>0);
+ if(prev.length>=3){const avg=prev.reduce((a,s)=>a+s.rev,0)/prev.length;if(avg>0&&t.rev<avg*.7)o.push(`Today's revenue is well below your recent daily average (${money(avg)}).`)}
+ D.items.filter(i=>!f.company||i.company==f.company).forEach(i=>{const s=stats(...ALL,{code:i.code});if(s.msg>=10&&s.ord/s.msg<.05)o.push(`${i.code} (${i.name}) has ${s.msg} messages but only ${s.ord} order(s) — review price/description.`)});
+ const cs=D.companies.map(c=>[c,stats(...ALL,{company:c})]),tot=cs.reduce((a,x)=>a+x[1].gp,0);
+ if(!f.company&&cs.length>1&&tot>0){const b=cs.sort((a,c)=>c[1].gp-a[1].gp)[0];if(b[1].del>=5&&b[1].gp/tot>.5)o.push(`${b[0]} generates ${n(b[1].gp/tot*100)}% of all gross profit.`)}
+ return o.length?o.map(x=>`<p>💡 ${esc(x)}</p>`).join(''):'<p class=mut>No notable insights yet — they appear once there is enough data.</p>'}
+/* ---------- forms ---------- */
+function form(title,fields,ok){
+ const d=$('#dlg');d.innerHTML=`<form><h3>${title}</h3>${fields.map(f=>{const id='f_'+f.k;let c;
+  if(f.t=='select')c=`<select id=${id}>${f.o.map(x=>`<option ${x==f.v?'selected':''}>${esc(x)}</option>`).join('')}</select>`;
+  else if(f.t=='area')c=`<textarea id=${id} rows=2>${esc(f.v||'')}</textarea>`;
+  else c=`<input id=${id} type=${f.t||'text'} value="${esc(f.v??'')}" ${f.l?`list=l_${f.k}`:''} ${f.ro?'readonly':''} ${f.t=='number'?'step=any min=0':''}>${f.l?`<datalist id=l_${f.k}>${f.l.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>`:''}`;
+  return`<label for=${id}>${f.n}</label>${c}`}).join('')}<p id=pp class=mut></p><p id=er class=err></p><div class=bar><button class=pr>Save</button><button type=button onclick="$('#dlg').close()">Cancel</button></div></form>`;
+ const fm=d.querySelector('form'),g=k=>$('#f_'+k),pp=()=>{if(g('price')&&g('cost'))$('#pp').textContent='Profit per sale: '+money(g('price').value-g('cost').value)};
+ fm.oninput=pp;pp();
+ fm.onsubmit=async e=>{e.preventDefault();const v={};fields.forEach(f=>v[f.k]=f.t=='file'?g(f.k).files[0]:g(f.k).value.trim());
+  const er=await ok(v);if(er)$('#er').textContent=er;else d.close()};
+ d.showModal();return g}
+const resize=f=>new Promise(r=>{if(!f)return r(null);const fr=new FileReader();fr.onload=()=>{const im=new Image();im.onload=()=>{const k=Math.min(1,260/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);r(c.toDataURL('image/jpeg',.6))};im.onerror=()=>r(null);im.src=fr.result};fr.readAsDataURL(f)});
+const num=v=>v!==''&&isFinite(v)&&+v>=0;
+const addName=(list,v)=>{if(v&&!list.some(x=>x.toLowerCase()==v.toLowerCase()))list.push(v);return list.find(x=>x.toLowerCase()==v.toLowerCase())};
+const ST=['Pending','Confirmed','Delivered','Cancelled'];
+const itemOf=c=>D.items.find(i=>i.code==c);
+const codeOf=v=>{const x=v.split(' — ')[0].trim().toLowerCase();return D.items.find(i=>i.code.toLowerCase()==x)};
+const A={
+ undo(){if(undoSnap){D=JSON.parse(undoSnap);undoSnap=null;persist();draw();toast('Restored.')}},
+ itemForm(code){const it=code?itemOf(code):null;
+  form(it?'Edit item':'New item',[{k:'code',n:'Item code *',v:it?.code,ro:!!it},{k:'name',n:'Product name *',v:it?.name},{k:'company',n:'Company *',v:it?.company||S.co,l:D.companies},{k:'cat',n:'Category',v:it?.category,l:D.categories},{k:'pub',n:'Date published',t:'date',v:it?.published||today()},{k:'price',n:'Selling price *',t:'number',v:it?.price},{k:'cost',n:'Company cost *',t:'number',v:it?.cost},{k:'img',n:'Image (optional)',t:'file'},{k:'notes',n:'Notes',t:'area',v:it?.notes},...(it?[{k:'ap',n:'Apply new price/cost to this item\'s existing orders?',t:'select',o:['No','Yes']}]:[])],async v=>{
+   if(!v.code||!v.name||!v.company)return'Code, name and company are required.';
+   if(!it&&D.items.some(i=>i.code.toLowerCase()==v.code.toLowerCase()))return'This item code already exists.';
+   if(!num(v.price)||!num(v.cost))return'Enter valid price and cost (0 or more).';
+   const img=await resize(v.img);
+   mut(()=>{const co=addName(D.companies,v.company);if(v.cat)v.cat=addName(D.categories,v.cat);
+    const o={code:it?.code||v.code,name:v.name,company:co,category:v.cat,published:v.pub||today(),price:+v.price,cost:+v.cost,image:img||it?.image||null,notes:v.notes,added:it?.added||today()};
+    if(it){Object.assign(it,o);if(v.ap=='Yes')D.orders.filter(x=>x.code==it.code).forEach(x=>{x.price=o.price;x.cost=o.cost})}else D.items.push(o)})})},
+ delItem(c){const k=D.orders.filter(o=>o.code==c).length;if(confirm(`Delete item ${c} and its ${k} order(s) and message logs?`))mut(()=>{D.items=D.items.filter(i=>i.code!=c);D.orders=D.orders.filter(o=>o.code!=c);D.messages=D.messages.filter(m=>m.code!=c)},'Item deleted.',1)},
+ orderForm(id){const o=id?D.orders.find(x=>x.id==id):null;
+  const g=form(o?'Edit order':'New order',[{k:'date',n:'Order date',t:'date',v:o?.date||(S.date||today())},{k:'code',n:'Item code *',v:o?o.code:'',l:D.items.map(i=>i.code+' — '+i.name)},{k:'qty',n:'Quantity',t:'number',v:o?.qty||1},{k:'price',n:'Selling price (each) *',t:'number',v:o?.price},{k:'cost',n:'Company cost (each) *',t:'number',v:o?.cost},{k:'status',n:'Status',t:'select',o:ST,v:o?.status||'Pending'},{k:'dd',n:'Delivery date (used when Delivered; blank = today)',t:'date',v:o?.delDate},{k:'ref',n:'Customer / reference',v:o?.ref}],v=>{
+   const it=codeOf(v.code);if(!it)return'Pick an existing item code (add the item first).';
+   if(!num(v.price)||!num(v.cost)||!(+v.qty>0))return'Enter valid quantity, price and cost.';
+   mut(()=>{const r={date:v.date,code:it.code,qty:+v.qty,price:+v.price,cost:+v.cost,status:v.status,ref:v.ref,delDate:v.status=='Delivered'?(v.dd||(o?(o.delDate||o.date):today())):null};if(o)Object.assign(o,r);else D.orders.push({id:uid(),...r})})});
+  if(!o)g('code').onchange=()=>{const it=codeOf(g('code').value);if(it){g('price').value=it.price;g('cost').value=it.cost;g('price').dispatchEvent(new Event('input',{bubbles:true}))}}},
+ setStatus(id,s){mut(()=>{const o=D.orders.find(o=>o.id==id);o.status=s;o.delDate=s=='Delivered'?(o.delDate||today()):null})},
+ delOrder(id){if(confirm('Delete this order?'))mut(()=>{D.orders=D.orders.filter(o=>o.id!=id)},'Order deleted.',1)},
+ msgForm(){form('Log messages',[{k:'date',n:'Date',t:'date',v:S.date||today()},{k:'code',n:'Item code *',l:D.items.map(i=>i.code+' — '+i.name)},{k:'count',n:'Messages received *',t:'number',v:1}],v=>{const it=codeOf(v.code);if(!it)return'Pick an existing item code.';if(!(+v.count>0))return'Enter a count above 0.';mut(()=>D.messages.push({id:uid(),date:v.date,code:it.code,count:Math.round(+v.count)}))})},
+ delMsg(id){if(confirm('Delete this message entry?'))mut(()=>{D.messages=D.messages.filter(m=>m.id!=id)},'Deleted.',1)},
+ expForm(){form('Add expense',[{k:'date',n:'Date',t:'date',v:S.date},{k:'type',n:'Type',t:'select',o:['Delivery','Marketplace','Advertising','Other']},{k:'amount',n:'Amount *',t:'number'},{k:'note',n:'Note'}],v=>{if(!num(v.amount)||+v.amount==0)return'Enter an amount.';mut(()=>D.expenses.push({id:uid(),date:v.date,type:v.type,amount:+v.amount,note:v.note}))})},
+ delExp(id){if(confirm('Delete this expense?'))mut(()=>{D.expenses=D.expenses.filter(e=>e.id!=id)},'Deleted.',1)},
+ sort(t,k){const s=S.sort[t];S.sort[t]=[k,s[0]==k?-s[1]:-1];draw()},
+ setCo(c){S.co=c;$('#gco').value=c;draw()},
+ exp(){const b=new Blob([JSON.stringify(D,null,1)],{type:'application/json'});dl(b,'marketplace-backup-'+today()+'.json');D.settings.lastExport=today();persist();draw()},
+ csv(w){const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"',M={};D.items.forEach(i=>M[i.code]=i);
+  const rows=w=='orders'?[['Order ID','Date','Item code','Product','Company','Qty','Price','Cost','Status','Profit counted','Reference'],...D.orders.map(o=>[o.id,o.date,o.code,M[o.code]?.name,M[o.code]?.company,o.qty,o.price,o.cost,o.status,o.status=='Delivered'?(o.price-o.cost)*o.qty:0,o.ref])]:[['Code','Product','Company','Category','Published','Price','Cost','Notes'],...D.items.map(i=>[i.code,i.name,i.company,i.category,i.published,i.price,i.cost,i.notes])];
+  dl(new Blob(['\ufeff'+rows.map(r=>r.map(q).join(',')).join('\n')],{type:'text/csv'}),w+'-'+today()+'.csv')},
+ imp(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const j=JSON.parse(r.result);if(!['items','orders','companies','messages'].every(k=>Array.isArray(j[k]))||!j.orders.every(o=>o&&o.code&&o.date&&ST.includes(o.status))||!j.items.every(i=>i&&i.code))throw 0;
+  if(confirm(`Replace ALL current data with this backup (${j.items.length} items, ${j.orders.length} orders)? You can undo right after.`))mut(()=>{D=Object.assign(blank(),j)},'Backup restored.',1)}catch(e){alert('This file is not a valid tracker backup.')}};r.readAsText(f);inp.value=''},
+ cur(v){D.settings.currency=v;persist();draw()},
+ reset(){if(prompt('Type DELETE to erase all data (export a backup first).')=='DELETE')mut(()=>{D=blank()},'All data erased.',1)}
+};
+const dl=(b,n)=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=n;a.click()};
+/* ---------- pages ---------- */
+const dnav=(d)=>`<div class=bar><button onclick="S.date=add(S.date,-1);draw()">◀</button><input type=date value="${d}" onchange="S.date=this.value||today();draw()"><button onclick="S.date=add(S.date,1);draw()">▶</button><button onclick="S.date=today();draw()">Today</button></div>`;
+const nameOf=c=>(itemOf(c)||{}).name||c;
+function bestWorst(a,b,f){const rows=D.items.filter(i=>!f.company||i.company==f.company).map(i=>[i,stats(a,b,{code:i.code})]).filter(x=>x[1].ord>0).sort((x,y)=>y[1].gp-x[1].gp);
+ const cs=(f.company?[f.company]:D.companies).map(c=>[c,stats(a,b,{company:c})]).filter(x=>x[1].ord>0).sort((x,y)=>y[1].gp-x[1].gp);
+ const l=(r,w,k)=>r.length>(w?1:0)?`${esc(k?r[w?r.length-1:0][0].code+' '+r[w?r.length-1:0][0].name:r[w?r.length-1:0][0])} (${money(r[w?r.length-1:0][1].gp)})`:'—';return{ib:l(rows,0,1),iw:l(rows,1,1),cb:l(cs,0),cw:l(cs,1)}}
+const P={
+ dash(){const f=F(),t=today(),T=stats(t,t,f),Y=stats(add(t,-1),add(t,-1),f),[wa,wb]=rng('week',t),[ma,mb]=rng('month',t),pw=prevR('week',t),pm=prevR('month',t),A_=stats(...ALL,f),b=bestWorst(...ALL,f);
+  const nag=!D.settings.lastExport||(parse(t)-parse(D.settings.lastExport))/864e5>7?`<p class=warn>⚠ ${D.settings.lastExport?'Last backup: '+D.settings.lastExport:'You have never exported a backup'} — go to Data → Export backup.</p>`:'';
+  const [L,R]=series('day',14,t,f),[WL,WR]=series('week',8,t,f);
+  return nag+`<h2>Today — ${t}${S.co?' · '+esc(S.co):''}</h2><div class=cards>${card('Sales (delivered)',money(T.rev))}${card('Gross profit',money(T.gp))}${card('Orders',n(T.ord))}${card('Delivered',n(T.del))}${card('Pending',n(T.pend))}${card('Confirmed',n(T.conf))}${card('Cancelled',n(T.can))}${card('Messages',n(T.msg))}${card('Items published',n(T.pub))}</div>
+  <div class=box><h3>Today vs yesterday</h3>${cmp(T,Y,'Yesterday','Today')}</div>
+  <div class=box><h3>Insights</h3>${insights(f)}</div>
+  <div class=box><h3>This week vs last week</h3>${cmp(stats(wa,wb,f),stats(...pw,f),'Last week','This week')}</div>
+  <div class=box><h3>This month vs last month</h3>${cmp(stats(ma,mb,f),stats(...pm,f),'Last month','This month')}</div>
+  <h2>All time</h2><div class=cards>${card('Revenue',money(A_.rev))}${card('Gross profit',money(A_.gp))}${card('Net profit',money(A_.net))}${card('Best item',b.ib)}${card('Best company',b.cb)}</div>
+  <h2>Trends</h2>${chart(L,[{n:'Revenue',v:R.map(s=>s.rev),c:'#2563eb'},{n:'Profit',v:R.map(s=>s.gp),c:'#16a34a'}])}${chart(L,[{n:'Messages',v:R.map(s=>s.msg),c:'#9333ea'},{n:'Orders',v:R.map(s=>s.ord),c:'#d97706'}])}${chart(L,[{n:'Delivered',v:R.map(s=>s.del),c:'#16a34a'},{n:'Cancelled',v:R.map(s=>s.can),c:'#dc2626'}])}${chart(WL,[{n:'Weekly revenue',v:WR.map(s=>s.rev),c:'#2563eb'},{n:'Weekly profit',v:WR.map(s=>s.gp),c:'#16a34a'}])}`},
+ daily(){const f=F(),d=S.date,s=stats(d,d,f),p=stats(add(d,-1),add(d,-1),f),M={};
+  const its=D.items.filter(i=>i.published==d&&(!f.company||i.company==f.company)),cos=[...new Set(its.map(i=>i.company))];
+  const os=D.orders.filter(o=>(o.date==d||(o.status=='Delivered'&&(o.delDate||o.date)==d))&&(!f.company||itemOf(o.code)?.company==f.company)),ms=D.messages.filter(m=>m.date==d&&(!f.company||itemOf(m.code)?.company==f.company)),es=f.company?[]:D.expenses.filter(e=>e.date==d);
+  return`<h2>Daily report</h2>${dnav(d)}<div class=cards>${card('Published',n(s.pub),`<small>${esc(its.map(i=>i.code).join(', ')||'—')}</small>`)}${card('Companies',n(cos.length),`<small>${esc(cos.join(', ')||'—')}</small>`)}${card('Revenue',money(s.rev))}${card('Gross profit',money(s.gp))}${card('Net profit',money(s.net))}</div>
+  <div class=box><h3>${d} vs ${add(d,-1)}</h3>${cmp(s,p,add(d,-1),d)}</div>
+  <div class=box><h3>Orders placed or delivered on this day</h3>${ordTable(os)}</div>
+  <div class=box><h3>Messages <button onclick="A.msgForm()">+ Log</button></h3>${ms.length?`<div class=tw><table>${ms.map(m=>`<tr><td>${esc(m.code)}<td>${esc(nameOf(m.code))}<td>${m.count}<td><button class=dg onclick="A.delMsg('${m.id}')">✕</button></tr>`).join('')}</table></div>`:'<p class=mut>No messages logged.</p>'}</div>
+  <div class=box><h3>Expenses (not tied to a company) <button onclick="A.expForm()">+ Add</button></h3>${es.length?`<div class=tw><table>${es.map(e=>`<tr><td>${e.type}<td>${money(e.amount)}<td>${esc(e.note)}<td><button class=dg onclick="A.delExp('${e.id}')">✕</button></tr>`).join('')}</table></div>`:'<p class=mut>No expenses.</p>'}</div>`},
+ report(){const f=F(),m=S.mode,d=S.date,[a,b]=rng(m,d),pr=prevR(m,d),s=stats(a,b,f),p=stats(...pr,f),t=today(),end=b<t?b:t,ds=a>end?[]:days(a,end),per=ds.map(x=>[x,stats(x,x,f)]),act=per.filter(x=>x[1].ord+x[1].msg+x[1].pub>0).sort((x,y)=>y[1].gp-x[1].gp),k=ds.length||1,bw=bestWorst(a,b,f);
+  const yr=m=='month'?`<div class=box><h3>Same month last year</h3>${cmp(s,stats(...rng('month',addM(d,-12)),f),'Last year','This year')}</div>`:'';
+  return`<h2>${m=='week'?'Weekly':'Monthly'} report</h2><div class=bar><select onchange="S.mode=this.value;draw()"><option value=week ${m=='week'?'selected':''}>Week</option><option value=month ${m=='month'?'selected':''}>Month</option></select><button onclick="S.date=${m=='week'?'add(S.date,-7)':'addM(S.date,-1)'};draw()">◀</button><input type=date value="${d}" onchange="S.date=this.value||today();draw()"><button onclick="S.date=${m=='week'?'add(S.date,7)':'addM(S.date,1)'};draw()">▶</button><b>${a} → ${b}</b></div>
+  <div class=cards>${card('Avg daily revenue',money(s.rev/k))}${card('Avg daily profit',money(s.gp/k))}${card('Avg daily orders',n(s.ord/k))}${card('Best day',act.length?act[0][0]+' ('+money(act[0][1].gp)+')':'—')}${card('Worst active day',act.length>1?act[act.length-1][0]+' ('+money(act[act.length-1][1].gp)+')':'—')}</div>
+  <div class=cards>${card('Best item',bw.ib)}${card('Worst item',bw.iw)}${card('Best company',bw.cb)}${card('Worst company',bw.cw)}</div>
+  <div class=box><h3>vs previous ${m}</h3>${cmp(s,p,pr[0]+' →',a+' →')}</div>${yr}${chart(per.map(x=>x[0]),[{n:'Revenue',v:per.map(x=>x[1].rev),c:'#2563eb'},{n:'Profit',v:per.map(x=>x[1].gp),c:'#16a34a'}])}<p class=mut>Averages use elapsed days only. Best/worst day compare days with activity, by gross profit.</p>`},
+ items(){const f=F(),[k,dir]=S.sort.items;let r=D.items.filter(i=>(!f.company||i.company==f.company)).map(i=>({i,s:stats(...ALL,{code:i.code})}));
+  const q=(S.iq||'').toLowerCase();if(q)r=r.filter(x=>(x.i.code+x.i.name+x.i.company).toLowerCase().includes(q));
+  r=r.filter(x=>x.s.msg>=S.minMsg).sort((a,b)=>{const g=x=>k in x.s?x.s[k]:x.i[k];const u=g(a),v=g(b);return(u==null)-(v==null)||(u>v?1:u<v?-1:0)*dir});
+  const h=(c,l)=>`<th data-s onclick="A.sort('items','${c}')">${l}${k==c?(dir>0?' ▲':' ▼'):''}</th>`;
+  return`<h2>Items</h2><div class=bar><input placeholder="Search code, product, company" value="${esc(S.iq)}" onchange="S.iq=this.value;draw()"><label>Min. messages <input type=number min=0 style="width:70px" value="${S.minMsg}" onchange="S.minMsg=+this.value||0;draw()"></label><button class=pr onclick="A.itemForm()">+ New item</button></div><p class=mut>Click a column to rank. Use Min. messages so tiny samples (e.g. 1 order, 100% conversion) don't look best.</p>
+  ${r.length?`<div class=tw><table><tr><th>Img<th>Code<th>Product<th>Company${h('published','Published')}${h('price','Price')}${h('cost','Cost')}${h('msg','Msgs')}${h('ord','Orders')}${h('pend','Pend')}${h('conf','Conf')}${h('del','Deliv')}${h('can','Canc')}${h('rev','Revenue')}${h('gp','Profit')}${h('conv','Conv %')}${h('cr','Cancel %')}<th></tr>${r.map(({i,s})=>`<tr><td>${i.image?`<img class=th src="${i.image}">`:''}<td>${esc(i.code)}<td>${esc(i.name)}<td>${esc(i.company)}<td>${i.published}<td>${money(i.price)}<td>${money(i.cost)}<td>${s.msg}<td>${s.ord}<td>${s.pend}<td>${s.conf}<td>${s.del}<td>${s.can}<td>${money(s.rev)}<td>${money(s.gp)}<td>${pc(s.conv)}<td>${pc(s.cr)}<td><button onclick="A.itemForm(this.dataset.c)" data-c="${esc(i.code)}">Edit</button> <button class=dg onclick="A.delItem(this.dataset.c)" data-c="${esc(i.code)}">✕</button></tr>`).join('')}</table></div>`:'<p class=mut>No items yet. Click “+ New item” to add your first one.</p>'}`},
+ orders(){const f=F();let r=D.orders.filter(o=>(!f.company||itemOf(o.code)?.company==f.company)&&(!S.ost||o.status==S.ost)&&(!S.of||o.date>=S.of)&&(!S.ot||o.date<=S.ot));const q=(S.oq||'').toLowerCase();if(q)r=r.filter(o=>(o.code+nameOf(o.code)+(itemOf(o.code)?.company||'')+(o.ref||'')).toLowerCase().includes(q));
+  return`<h2>Orders</h2><div class=bar><input placeholder="Search" value="${esc(S.oq)}" onchange="S.oq=this.value;draw()"><select onchange="S.ost=this.value;draw()"><option value="">All statuses</option>${ST.map(x=>`<option ${S.ost==x?'selected':''}>${x}</option>`).join('')}</select><input type=date value="${S.of}" onchange="S.of=this.value;draw()"> to <input type=date value="${S.ot}" onchange="S.ot=this.value;draw()"><button class=pr onclick="A.orderForm()">+ New order</button></div>${ordTable(r.sort((a,b)=>b.date.localeCompare(a.date)))}`},
+ companies(){const [k,dir]=S.sort.cos,r=D.companies.map(c=>({c,s:stats(...ALL,{company:c}),n:D.items.filter(i=>i.company==c).length,pb:D.items.filter(i=>i.company==c&&i.published).length,b:bestWorst(...ALL,{company:c})})).sort((a,b)=>{const u=k=='c'?a.c:a.s[k],v=k=='c'?b.c:b.s[k];return((u==null)-(v==null))||(u>v?1:u<v?-1:0)*dir});
+  const h=(c,l)=>`<th data-s onclick="A.sort('cos','${c}')">${l}${k==c?(dir>0?' ▲':' ▼'):''}</th>`;
+  return`<h2>Companies</h2><p class=mut>Click a company to filter the whole tracker by it.</p>${r.length?`<div class=tw><table><tr>${h('c','Company')}<th>Products<th>Published${h('msg','Msgs')}${h('ord','Orders')}<th>Pend<th>Conf${h('del','Deliv')}${h('can','Canc')}${h('rev','Revenue')}<th>Cost${h('gp','Profit')}${h('appo','Avg profit/order')}${h('conv','Conv %')}${h('cr','Cancel %')}<th>Best product<th>Worst product</tr>${r.map(x=>`<tr><td><a href="#" onclick="A.setCo(this.dataset.c);return false" data-c="${esc(x.c)}">${esc(x.c)}</a><td>${x.n}<td>${x.pb}<td>${x.s.msg}<td>${x.s.ord}<td>${x.s.pend}<td>${x.s.conf}<td>${x.s.del}<td>${x.s.can}<td>${money(x.s.rev)}<td>${money(x.s.cost)}<td>${money(x.s.gp)}<td>${money(x.s.appo)}<td>${pc(x.s.conv)}<td>${pc(x.s.cr)}<td>${x.b.ib}<td>${x.b.iw}</tr>`).join('')}</table></div>`:'<p class=mut>Companies are created automatically when you add an item.</p>'}`},
+ data(){return`<h2>Data &amp; backup</h2><div class=box><p>Your data lives only in <b>this browser on this device</b> (localStorage). Clearing browser data or switching device/browser loses it unless you export a backup. GitHub Pages hosts the app, not your data. Export regularly (weekly) and keep the file safe.</p><p>Last backup: <b>${D.settings.lastExport||'never'}</b></p><div class=bar><button class=pr onclick="A.exp()">Export backup (JSON)</button><button onclick="A.csv('orders')">Orders CSV</button><button onclick="A.csv('items')">Items CSV</button><label>Restore backup: <input type=file accept=".json" onchange="A.imp(this)"></label></div></div>
+ <div class=box><label>Currency symbol (optional) <input style="width:90px" value="${esc(D.settings.currency)}" onchange="A.cur(this.value)"></label><p class=mut>${D.items.length} items · ${D.orders.length} orders · ${D.messages.length} message logs · ${D.expenses.length} expenses</p></div>
+ <div class=box><h3>Danger zone</h3><button class=dg onclick="A.reset()">Erase all data</button></div>
+ <div class=box><h3>How numbers are counted</h3><p class=mut>Each order has one status, so it is never counted twice. Revenue, cost and profit count only <b>Delivered</b> orders (price × quantity), dated by <b>delivery date</b> (set automatically when you mark an order Delivered; editable). Order, pending, confirmed and cancelled counts use the order date, and delivery/cancellation rates compare orders placed in the period. Pending/Confirmed/Cancelled orders appear in order counts but not in money. Orders keep their own price/cost snapshot, so changing an item's price later does not rewrite history unless you choose to apply it. Expenses are separate and only reduce Net profit; they are excluded when filtering by company.</p></div>`}
+};
+function ordTable(r){if(!r.length)return'<p class=mut>No orders to show.</p>';const L=r.slice(0,300);
+ return`<div class=tw><table><tr><th>Date<th>Item<th>Product<th>Company<th>Qty<th>Price<th>Cost<th>Profit<th>Status<th>Delivered<th>Ref<th></tr>${L.map(o=>`<tr><td>${o.date}<td>${esc(o.code)}<td>${esc(nameOf(o.code))}<td>${esc(itemOf(o.code)?.company)}<td>${o.qty}<td>${money(o.price)}<td>${money(o.cost)}<td>${money((o.price-o.cost)*o.qty)}<td><select onchange="A.setStatus('${o.id}',this.value)">${ST.map(x=>`<option ${x==o.status?'selected':''}>${x}</option>`).join('')}</select><td>${o.status=='Delivered'?(o.delDate||o.date):''}<td>${esc(o.ref)}<td><button onclick="A.orderForm('${o.id}')">Edit</button> <button class=dg onclick="A.delOrder('${o.id}')">✕</button></tr>`).join('')}</table></div>${r.length>300?'<p class=mut>Showing first 300 — narrow with filters.</p>':''}<p class=mut>Profit column shows potential profit; it is only counted in reports once Delivered.</p>`}
+const PAGES=[['dash','Dashboard'],['daily','Daily'],['report','Week / Month'],['items','Items'],['orders','Orders'],['companies','Companies'],['data','Data']];
+function draw(){const p=(location.hash||'#dash').slice(1);const pg=P[p]?p:'dash';
+ $('#nav').innerHTML=PAGES.map(([k,l])=>`<a href="#${k}" class="${k==pg?'on':''}">${l}</a>`).join('');
+ $('#gco').innerHTML='<option value="">All companies</option>'+D.companies.map(c=>`<option ${c==S.co?'selected':''} value="${esc(c)}">${esc(c)}</option>`).join('');
+ if(S.co&&!D.companies.includes(S.co))S.co='';
+ try{$('#app').innerHTML=P[pg]()}catch(e){$('#app').innerHTML='<p class=err>Display error: '+esc(e.message)+'. Your data is safe — export a backup from the Data page.</p>';console.error(e)}}
+$('#gco').onchange=e=>{S.co=e.target.value;draw()};
+addEventListener('hashchange',draw);draw();
+</script>
+</body></html>
